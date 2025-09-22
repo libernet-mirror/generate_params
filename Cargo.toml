@@ -1,0 +1,10 @@
+[package]
+name = "generate_params"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dusk-bls12_381 = "0.14.2"
+getrandom = "0.3.3"
+group = "0.13.0"
+primitive-types = "0.14.0"
