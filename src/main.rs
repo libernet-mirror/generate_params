@@ -98,7 +98,7 @@ fn main() -> Result<()> {
                     bincode::config::standard(),
                 )?;
             }
-            println!("{} written", path);
+            println!("\n{} written", path);
         }
     }
 }
