@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.100"
+bincode = { version = "2.0.1", features = ["serde"] }
+clap = { version = "4.5.48", features = ["derive"] }
 dusk-bls12_381 = "0.14.2"
 getrandom = "0.3.3"
 group = "0.13.0"
-primitive-types = "0.14.0"
+primitive-types = { version = "0.14.0", features = ["serde"] }
