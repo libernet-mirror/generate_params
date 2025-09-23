@@ -13,13 +13,17 @@ const MAX_COUNT: usize = u32::MAX as usize + 1;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Number of parameters to generate, defaulting to `u32::MAX`.
+    /// Number of parameters to generate, defaulting to `u32::MAX+1`.
     #[arg(long, default_value = "4294967296")]
     count: usize,
 
-    /// Output file pattern.
-    #[arg(long, default_value = "params{}.bin")]
-    out_pattern: String,
+    /// G1 file pattern.
+    #[arg(long, default_value = "g1_{}.bin")]
+    g1_pattern: String,
+
+    /// G2 file path.
+    #[arg(long, default_value = "g2.bin")]
+    g2_path: String,
 
     /// Number of generator pairs in each chunk.
     #[arg(long, default_value = "65536")]
@@ -45,19 +49,22 @@ fn main() -> Result<()> {
         return Err(anyhow!("each chunk must have at least 2 elements"));
     }
     println!("Chunk length: {}", args.chunk_length);
-    println!("Out file pattern: {}", args.out_pattern);
+    println!("G1 file pattern: {}", args.g1_pattern);
+    println!("G2 file path: {}", args.g2_path);
 
-    let mut chunk = vec![(H384::zero(), H768::zero()); args.chunk_length];
     let tau = get_random_scalar();
 
-    println!("Generating {} point pairs...", args.count);
+    {
+        let g2 = G2Projective::generator() * tau;
+        let hex = H768::from_slice(g2.to_bytes().as_ref());
+        let mut file = File::create(args.g2_path.as_str())?;
+        bincode::serde::encode_into_std_write(&hex, &mut file, bincode::config::standard())?;
+        println!("{} written", args.g2_path.as_str());
+    }
 
-    let mut g1 = G1Projective::generator();
-    let mut g2 = G2Projective::generator();
-    let mut hex1 = H384::from_slice(g1.to_bytes().as_ref());
-    let mut hex2 = H768::from_slice(g2.to_bytes().as_ref());
-    chunk[0] = (hex1, hex2);
+    println!("Generating {} G1 points...", args.count);
 
+    let mut chunk = vec![H384::zero(); args.chunk_length];
     let index = Arc::pin(AtomicUsize::new(0));
 
     let index2 = index.clone();
@@ -74,21 +81,19 @@ fn main() -> Result<()> {
         }
     });
 
+    let mut g = G1Projective::generator();
     loop {
         let index = index.fetch_add(1, Ordering::AcqRel);
         if index >= MAX_COUNT {
             reporter.join().unwrap();
             return Ok(());
         }
-        g1 *= tau;
-        g2 *= tau;
-        hex1 = H384::from_slice(g1.to_bytes().as_ref());
-        hex2 = H768::from_slice(g2.to_bytes().as_ref());
-        chunk[index % args.chunk_length] = (hex1, hex2);
+        g *= tau;
+        chunk[index % args.chunk_length] = H384::from_slice(g.to_bytes().as_ref());
         if index % args.chunk_length == args.chunk_length - 1 {
             let chunk_index = index / args.chunk_length;
             let path = args
-                .out_pattern
+                .g1_pattern
                 .replace("{}", chunk_index.to_string().as_str());
             {
                 let mut file = File::create(path.as_str())?;
