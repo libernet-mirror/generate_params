@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow};
+use blstrs::{G1Projective, G2Projective, Scalar};
 use clap::Parser;
-use dusk_bls12_381::{BlsScalar as Scalar, G1Projective, G2Projective};
-use group::GroupEncoding;
+use dusk_bls12_381::BlsScalar as DuskScalar;
+use group::{Group, GroupEncoding};
 use primitive_types::{H384, H768};
 use std::fs::File;
 use std::io::Write;
@@ -33,7 +34,10 @@ struct Args {
 fn get_random_scalar() -> Scalar {
     let mut bytes = [0u8; 64];
     getrandom::fill(&mut bytes).unwrap();
-    Scalar::from_bytes_wide(&bytes)
+    let scalar = DuskScalar::from_bytes_wide(&bytes);
+    Scalar::from_bytes_le(&scalar.to_bytes())
+        .into_option()
+        .unwrap()
 }
 
 fn main() -> Result<()> {
