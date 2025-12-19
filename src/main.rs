@@ -20,29 +20,25 @@ struct Args {
     #[arg(long, default_value = "4294967296")]
     g1_count: usize,
 
-    /// Number of Pedersen points to generate, defaulting to `u32::MAX+1`.
+    /// Number of BLS12-381 G2 points to generate, defaulting to `u32::MAX+1`.
     #[arg(long, default_value = "4294967296")]
-    p_count: usize,
+    g2_count: usize,
 
     /// G1 file pattern (for BLS12-381 G1).
     #[arg(long, default_value = "g1_{}.bin")]
     g1_pattern: String,
 
-    /// G2 file path (for BLS12-381 G2).
-    #[arg(long, default_value = "g2.bin")]
-    g2_path: String,
-
-    /// P file pattern (for Pedersen parameters).
-    #[arg(long, default_value = "p_{}.bin")]
-    p_pattern: String,
+    /// G2 file pattern (for BLS12-381 G2).
+    #[arg(long, default_value = "g2_{}.bin")]
+    g2_pattern: String,
 
     /// Number of G1 points in each chunk.
     #[arg(long, default_value = "65536")]
     g1_chunk_length: usize,
 
-    /// Number of Pedersen points in each chunk.
+    /// Number of G2 points in each chunk.
     #[arg(long, default_value = "65536")]
-    p_chunk_length: usize,
+    g2_chunk_length: usize,
 }
 
 fn get_random_scalar() -> Scalar {
@@ -54,22 +50,15 @@ fn get_random_scalar() -> Scalar {
         .unwrap()
 }
 
-fn get_random_point() -> G1Projective {
-    static DST: &'static [u8] = b"libernet/pedersen_hash_generator/v1";
-    let mut bytes = [0u8; 64];
-    getrandom::fill(&mut bytes).unwrap();
-    G1Projective::hash_to_curve(&bytes, DST, &[])
-}
-
 #[derive(Debug)]
 struct Generator {
     tau: Scalar,
     g1_count: AtomicUsize,
-    p_count: AtomicUsize,
+    g2_count: AtomicUsize,
     print_mutex: Mutex<()>,
     reporter_handle: Mutex<Option<JoinHandle<Result<()>>>>,
     g1_generator_handle: Mutex<Option<JoinHandle<Result<()>>>>,
-    pedersen_generator_handle: Mutex<Option<JoinHandle<Result<()>>>>,
+    g2_generator_handle: Mutex<Option<JoinHandle<Result<()>>>>,
 }
 
 impl Generator {
@@ -81,9 +70,9 @@ impl Generator {
             loop {
                 std::thread::sleep(Duration::from_secs(1));
                 print!(
-                    "\r{} G1 pts and {} Pedersen pts generated in {} seconds",
+                    "\r{} G1 pts and {} G2 pts generated in {} seconds",
                     self.g1_count.load(Ordering::Acquire),
-                    self.p_count.load(Ordering::Acquire),
+                    self.g2_count.load(Ordering::Acquire),
                     (Instant::now() - start).as_secs()
                 );
                 std::io::stdout().flush().unwrap();
@@ -95,11 +84,11 @@ impl Generator {
         let reporter = Arc::pin(Self {
             tau: get_random_scalar(),
             g1_count: AtomicUsize::new(0),
-            p_count: AtomicUsize::new(0),
+            g2_count: AtomicUsize::new(0),
             print_mutex: Mutex::default(),
             reporter_handle: Mutex::default(),
             g1_generator_handle: Mutex::default(),
-            pedersen_generator_handle: Mutex::default(),
+            g2_generator_handle: Mutex::default(),
         });
         reporter.clone().start_reporting();
         reporter
@@ -162,16 +151,7 @@ impl Generator {
         }));
     }
 
-    fn generate_g2(self: Pin<Arc<Self>>, path: &str) -> Result<()> {
-        let g2 = G2Projective::generator() * self.tau;
-        let hex = H768::from_slice(g2.to_bytes().as_ref());
-        let mut file = File::create(path)?;
-        bincode::serde::encode_into_std_write(&hex, &mut file, bincode::config::standard())?;
-        self.println(format!("{} written", path));
-        Ok(())
-    }
-
-    fn generate_pedersen(
+    fn generate_g2(
         self: Pin<Arc<Self>>,
         count: usize,
         pattern: &str,
@@ -188,16 +168,17 @@ impl Generator {
             return Err(anyhow!("each chunk must have at least 2 elements"));
         }
 
-        self.println(format!("Generating {} Pedersen points...", count));
+        self.println(format!("Generating {} G2 points...", count));
 
-        let mut chunk = vec![H384::zero(); chunk_length];
+        let mut chunk = vec![H768::zero(); chunk_length];
+        let mut g = G2Projective::generator();
         loop {
-            let index = self.p_count.fetch_add(1, Ordering::AcqRel);
+            let index = self.g2_count.fetch_add(1, Ordering::AcqRel);
             if index >= MAX_COUNT {
                 return Ok(());
             }
-            let point = get_random_point();
-            chunk[index % chunk_length] = H384::from_slice(point.to_bytes().as_ref());
+            g *= self.tau;
+            chunk[index % chunk_length] = H768::from_slice(g.to_bytes().as_ref());
             if index % chunk_length == chunk_length - 1 {
                 let chunk_index = index / chunk_length;
                 let path = pattern.replace("{}", chunk_index.to_string().as_str());
@@ -214,23 +195,18 @@ impl Generator {
         }
     }
 
-    fn start_generate_pedersen(
-        self: Pin<Arc<Self>>,
-        count: usize,
-        pattern: String,
-        chunk_length: usize,
-    ) {
+    fn start_generate_g2(self: Pin<Arc<Self>>, count: usize, pattern: String, chunk_length: usize) {
         let generator = self.clone();
-        let mut handle = generator.pedersen_generator_handle.lock().unwrap();
+        let mut handle = generator.g2_generator_handle.lock().unwrap();
         *handle = Some(std::thread::spawn(move || {
-            self.generate_pedersen(count, pattern.as_str(), chunk_length)
+            self.generate_g2(count, pattern.as_str(), chunk_length)
         }));
     }
 
     fn join_all(&self) {
         for handle in [
             &self.g1_generator_handle,
-            &self.pedersen_generator_handle,
+            &self.g2_generator_handle,
             &self.reporter_handle,
         ] {
             let mut handle = handle.lock().unwrap();
@@ -250,14 +226,11 @@ impl Drop for Generator {
 fn main() -> Result<()> {
     let args = Args::parse();
     println!("G1 chunk length: {}", args.g1_chunk_length);
-    println!("Pedersen chunk length: {}", args.p_chunk_length);
+    println!("G2 chunk length: {}", args.g2_chunk_length);
     println!("G1 file pattern: {}", args.g1_pattern);
-    println!("G2 file path: {}", args.g2_path);
-    println!("Pedersen file pattern: {}", args.p_pattern);
+    println!("G2 file pattern: {}", args.g2_pattern);
 
     let generator = Generator::new();
-
-    generator.clone().generate_g2(args.g2_path.as_str())?;
 
     generator.clone().start_generate_g1(
         args.g1_count,
@@ -265,10 +238,10 @@ fn main() -> Result<()> {
         args.g1_chunk_length,
     );
 
-    generator.clone().start_generate_pedersen(
-        args.p_count,
-        args.p_pattern.clone(),
-        args.p_chunk_length,
+    generator.clone().start_generate_g2(
+        args.g2_count,
+        args.g2_pattern.clone(),
+        args.g2_chunk_length,
     );
 
     generator.join_all();
