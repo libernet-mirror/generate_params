@@ -92,7 +92,7 @@ impl Generator {
     }
 
     fn new() -> Pin<Arc<Self>> {
-        let reporter = Arc::pin(Self {
+        let generator = Arc::pin(Self {
             tau: get_random_scalar(),
             g1_count: AtomicUsize::new(0),
             g2_count: AtomicUsize::new(0),
@@ -101,8 +101,8 @@ impl Generator {
             g1_generator_handle: Mutex::default(),
             g2_generator_handle: Mutex::default(),
         });
-        reporter.clone().start_reporting();
-        reporter
+        generator.clone().start_reporting();
+        generator
     }
 
     fn println(&self, s: impl AsRef<str>) {
