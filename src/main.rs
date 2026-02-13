@@ -1,13 +1,13 @@
 use anyhow::{Result, anyhow};
 use blstrs::{G1Projective, G2Projective, Scalar};
 use clap::Parser;
-use dusk_bls12_381::BlsScalar as DuskScalar;
+use ff::PrimeField;
 use group::{Group, GroupEncoding};
-use primitive_types::{H384, H768};
+use primitive_types::{H384, H512, H768, U512};
 use std::fs::File;
 use std::io::Write;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, LazyLock, Mutex, atomic::AtomicUsize, atomic::Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -41,13 +41,24 @@ struct Args {
     g2_chunk_length: usize,
 }
 
-fn get_random_scalar() -> Scalar {
+fn get_random_bytes() -> H512 {
     let mut bytes = [0u8; 64];
     getrandom::fill(&mut bytes).unwrap();
-    let scalar = DuskScalar::from_bytes_wide(&bytes);
-    Scalar::from_bytes_le(&scalar.to_bytes())
-        .into_option()
-        .unwrap()
+    H512::from_slice(&bytes)
+}
+
+fn h512_to_scalar(h512: H512) -> Scalar {
+    static MODULUS: LazyLock<U512> = LazyLock::new(|| Scalar::MODULUS.parse().unwrap());
+    let dividend = U512::from_little_endian(h512.as_bytes());
+    let quotient = dividend / *MODULUS;
+    let remainder = dividend - quotient * *MODULUS;
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&remainder.to_little_endian()[0..32]);
+    Scalar::from_repr_vartime(bytes).unwrap()
+}
+
+fn get_random_scalar() -> Scalar {
+    h512_to_scalar(get_random_bytes())
 }
 
 #[derive(Debug)]
@@ -132,11 +143,9 @@ impl Generator {
                 let path = pattern.replace("{}", chunk_index.to_string().as_str());
                 {
                     let mut file = File::create(path.as_str())?;
-                    bincode::serde::encode_into_std_write(
-                        &chunk,
-                        &mut file,
-                        bincode::config::standard(),
-                    )?;
+                    for point in chunk.as_slice() {
+                        file.write(point.as_fixed_bytes())?;
+                    }
                 }
                 self.println(format!("\n{} written", path));
             }
@@ -184,11 +193,9 @@ impl Generator {
                 let path = pattern.replace("{}", chunk_index.to_string().as_str());
                 {
                     let mut file = File::create(path.as_str())?;
-                    bincode::serde::encode_into_std_write(
-                        &chunk,
-                        &mut file,
-                        bincode::config::standard(),
-                    )?;
+                    for point in chunk.as_slice() {
+                        file.write(point.as_fixed_bytes())?;
+                    }
                 }
                 self.println(format!("\n{} written", path));
             }
